@@ -15,6 +15,7 @@ class ResearchState(TypedDict):
     retrieved: Annotated[list[str], add]
     web_results: Annotated[list[str], add]
     findings: Annotated[list[str], add]
+    critic_retries: int
     report: Optional[str]
     status: str
     error: Optional[str]
@@ -25,6 +26,7 @@ def build_research_graph():
     from agents.retriever import retriever_agent
     from agents.web_search import web_search_agent
     from agents.analyst import analyst_agent
+    from agents.critic import critic_agent, route_after_critic
     from agents.writer import writer_agent
 
     # Create the graph
@@ -35,6 +37,7 @@ def build_research_graph():
     graph.add_node("retriever", retriever_agent)
     graph.add_node("web_search", web_search_agent)
     graph.add_node("analyst", analyst_agent)
+    graph.add_node("critic", critic_agent)
     graph.add_node("writer", writer_agent)
 
     # Add edges for workflow
@@ -51,8 +54,16 @@ def build_research_graph():
     # WebSearch -> Analyst (converge)
     graph.add_edge("web_search", "analyst")
 
-    # Analyst -> Writer
-    graph.add_edge("analyst", "writer")
+    # Analyst -> Critic -> Writer/Retriever
+    graph.add_edge("analyst", "critic")
+    graph.add_conditional_edges(
+        "critic",
+        route_after_critic,
+        {
+            "retriever": "retriever",
+            "writer": "writer",
+        },
+    )
 
     # Writer -> End
     graph.add_edge("writer", END)

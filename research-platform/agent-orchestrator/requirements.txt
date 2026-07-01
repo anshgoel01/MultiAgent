@@ -6,6 +6,8 @@ pydantic
 langgraph>=0.0.60
 langchain-core>=0.1.30
 langchain-groq>=0.1.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
 sentence-transformers>=2.2.0
 tavily-python>=0.3.0
 psycopg2-binary>=2.9.0

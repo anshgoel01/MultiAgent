@@ -6,11 +6,13 @@ from agents.retriever import retriever_agent
 from agents.web_search import web_search_agent
 from agents.analyst import analyst_agent
 from agents.writer import writer_agent
+from agents.critic import critic_agent
 
 __all__ = [
     'planner_agent',
     'retriever_agent',
     'web_search_agent',
+    'critic_agent',
     'analyst_agent',
     'writer_agent',
 ]

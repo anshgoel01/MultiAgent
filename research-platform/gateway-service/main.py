@@ -4,6 +4,7 @@ import os
 import logging
 import sys
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from slowapi import Limiter
@@ -21,11 +22,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title='Gateway')
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
