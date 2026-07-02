@@ -69,7 +69,7 @@ def build_research_graph():
     graph.add_edge("writer", END)
 
     # Compile the graph
-    compiled_graph: CompiledGraph = graph.compile()
+    compiled_graph = graph.compile()
     logger.info("Research graph compiled successfully")
     return compiled_graph
 
