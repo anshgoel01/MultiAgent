@@ -1,4 +1,4 @@
-# agent-orchestra/agents/__init__.py
+# agent-orchestrator/agents/__init__.py
 """Agent module for multi-agent research orchestration."""
 
 from agents.planner import planner_agent
