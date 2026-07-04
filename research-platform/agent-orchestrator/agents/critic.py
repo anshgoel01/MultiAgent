@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 try:
     llm = ChatGroq(
-        model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+        model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'),
         api_key=os.getenv('GROQ_API_KEY'),
         temperature=0.0,
         max_tokens=256,
