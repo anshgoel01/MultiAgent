@@ -15,7 +15,7 @@ except Exception as e:
     logger.error(f"Failed to initialize Groq LLM for critic: {str(e)}")
     llm = None
 
-MAX_CRITIC_RETRIES = 2
+MAX_CRITIC_RETRIES = 1
 
 
 def critic_agent(state: dict) -> dict:
