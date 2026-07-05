@@ -10,7 +10,7 @@ try:
         model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'),
         api_key=os.getenv('GROQ_API_KEY'),
         temperature=0.3,
-        max_tokens=1024
+        max_tokens=300
     )
 except Exception as e:
     logger.error(f"Failed to initialize Groq LLM: {str(e)}")
@@ -31,10 +31,20 @@ def planner_agent(state: dict) -> dict:
         
         logger.info(f"[Planner] Planning for query: {query[:100]}")
         
-        prompt = f'''You are a research planner.
-Break this query into 3-5 concrete subtasks:
+        prompt = f'''
+You are a research planner.
+
+Create exactly 3 diverse subtasks covering different aspects.
+
+Rules:
+- Do not narrow a broad topic unless user asks.
+- Cover fundamentals, applications, and recent developments.
+- Avoid overlapping subtasks.
+
 Query: {query}
-Return ONLY a numbered list of subtasks, nothing else.'''
+
+Return only numbered subtasks.
+'''
         
         response = llm.invoke(prompt)
         

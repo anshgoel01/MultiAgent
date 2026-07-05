@@ -10,14 +10,14 @@ try:
         model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'),
         api_key=os.getenv('GROQ_API_KEY'),
         temperature=0.2,
-        max_tokens=2048
+        max_tokens=800
     )
 except Exception as e:
     logger.error(f"Failed to initialize Groq LLM: {str(e)}")
     llm = None
 
 
-def _trim_and_deduplicate(sources: list[str], max_chars: int = 8000) -> str:
+def _trim_and_deduplicate(sources: list[str], max_chars: int = 4000) -> str:
     """Remove duplicate chunks and cap total context size."""
     seen = set()
     unique = []
@@ -71,7 +71,9 @@ Rules:
 - Only include findings directly supported by the sources
 - Do not repeat the same point twice
 - Prefer findings with specific numbers, dates, or named entities
-- If sources contradict each other, note it as a finding'''
+- If sources contradict each other, note it as a finding
+-Avoid generating findings that communicate the same idea.
+-Merge similar evidence into one stronger finding.'''
 
         response = llm.invoke(prompt)
 
