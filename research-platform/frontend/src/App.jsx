@@ -28,6 +28,14 @@ const formatStatusContent = (status, report) => {
   return `${status}...`;
 };
 
+const RUNNING_STAGES = [
+  "🔍 Planning subtasks...",
+  "📚 Retrieving documents...",
+  "🌐 Searching the web...",
+  "📊 Analyzing findings...",
+  "✍️ Writing report...",
+];
+
 const createSession = (messages = [], title = "New chat") => ({
   id: getMessageId(),
   title,
@@ -39,6 +47,61 @@ const sortSessions = (sessionList) =>
   [...sessionList].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
   );
+
+const normalizeSessions = (sessionList) =>
+  sortSessions(sessionList)
+    .map((session) => ({
+      ...session,
+      title: session.title || "New chat",
+      messages: session.messages || [],
+    }))
+    .slice(0, MAX_SESSIONS);
+
+const loadPersistedState = () => {
+  try {
+    const storedValue = localStorage.getItem(STORAGE_KEY);
+    if (!storedValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(storedValue);
+    if (!parsed) {
+      return null;
+    }
+
+    if (Array.isArray(parsed)) {
+      const sessions = normalizeSessions(parsed);
+      return {
+        sessions,
+        activeSessionId: sessions.length ? sessions[0].id : null,
+      };
+    }
+
+    if (typeof parsed === "object") {
+      const sessions = normalizeSessions(parsed.sessions || []);
+      const activeSessionId =
+        parsed.activeSessionId || (sessions[0] && sessions[0].id) || null;
+      return { sessions, activeSessionId };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const savePersistedState = (sessions, activeSessionId) => {
+  if (!sessions.length) {
+    localStorage.removeItem(STORAGE_KEY);
+    return;
+  }
+
+  const normalized = normalizeSessions(sessions);
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ sessions: normalized, activeSessionId }),
+  );
+};
 
 const formatTimestamp = (value) => {
   const date = new Date(value);
@@ -63,41 +126,41 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [runningStageIndex, setRunningStageIndex] = useState(0);
+  const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const copyResetTimeoutRef = useRef(null);
+  const hasLoadedPersistedStateRef = useRef(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    try {
-      const storedValue = localStorage.getItem(STORAGE_KEY);
-      if (storedValue) {
-        const parsed = JSON.parse(storedValue);
-        if (Array.isArray(parsed) && parsed.length) {
-          const normalized = sortSessions(
-            parsed
-              .filter((session) => session && typeof session === "object")
-              .map((session) => ({
-                ...session,
-                title: session.title || "New chat",
-                messages: session.messages || [],
-              })),
-          ).slice(0, MAX_SESSIONS);
+    const persisted = loadPersistedState();
 
-          if (normalized.length) {
-            setSessions(normalized);
-            setActiveSessionId(normalized[0].id);
-            setMessages(normalized[0].messages || []);
-            return;
-          }
-        }
-      }
-    } catch {
-      // Fall back to a fresh session when storage data is invalid.
+    if (persisted && persisted.sessions.length) {
+      setSessions(persisted.sessions);
+      setActiveSessionId(persisted.activeSessionId);
+      const selected = persisted.sessions.find(
+        (session) => session.id === persisted.activeSessionId,
+      );
+      setMessages(
+        selected ? selected.messages : persisted.sessions[0].messages,
+      );
+    } else {
+      const initialSession = createSession([], "New chat");
+      setSessions([initialSession]);
+      setActiveSessionId(initialSession.id);
+      setMessages([]);
     }
 
-    const initialSession = createSession([], "New chat");
-    setSessions([initialSession]);
-    setActiveSessionId(initialSession.id);
-    setMessages([]);
+    hasLoadedPersistedStateRef.current = true;
   }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPersistedStateRef.current) {
+      return;
+    }
+
+    savePersistedState(sessions, activeSessionId);
+  }, [sessions, activeSessionId]);
 
   useEffect(() => {
     return () => {
@@ -112,20 +175,32 @@ export default function App() {
   }, [messages]);
 
   useEffect(() => {
-    if (!sessions.length) {
-      localStorage.removeItem(STORAGE_KEY);
-      return;
+    const activeRunningMessage = messages.find(
+      (message) => message.role === "assistant" && message.status === "running",
+    );
+
+    if (!activeRunningMessage) {
+      setRunningStageIndex(0);
+      return undefined;
     }
 
-    const normalized = sortSessions(sessions)
-      .slice(0, MAX_SESSIONS)
-      .map((session) => ({
-        ...session,
-        messages: session.messages || [],
-      }));
+    setRunningStageIndex(0);
+    const intervalId = window.setInterval(() => {
+      setRunningStageIndex((prev) => (prev + 1) % RUNNING_STAGES.length);
+    }, 6000);
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-  }, [sessions]);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const appendMessage = (message) => {
     setMessages((prev) => {
@@ -159,7 +234,9 @@ export default function App() {
   };
 
   const selectSession = (sessionId) => {
-    const selectedSession = sessions.find((session) => session.id === sessionId);
+    const selectedSession = sessions.find(
+      (session) => session.id === sessionId,
+    );
     if (!selectedSession) {
       return;
     }
@@ -319,6 +396,27 @@ export default function App() {
     }
   };
 
+  const handleCopyMessage = async (messageContent, messageId) => {
+    try {
+      await navigator.clipboard.writeText(messageContent);
+      setCopiedMessageId(messageId);
+      if (copyResetTimeoutRef.current) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedMessageId(null);
+      }, 2000);
+    } catch {
+      setError("Unable to copy report.");
+    }
+  };
+
+  const exampleQueries = [
+    "What are the latest trends in generative AI in 2025?",
+    "Compare React vs Vue vs Angular for enterprise applications",
+    "What are the key risks and opportunities in India's fintech sector?",
+  ];
+
   return (
     <div className={`app-shell ${isSidebarOpen ? "" : "sidebar-collapsed"}`}>
       <div className="chat-sidebar">
@@ -355,44 +453,95 @@ export default function App() {
             >
               ☰
             </button>
-            <h1>🔍 Research Platform</h1>
-            <p>
-              Ask questions and get live research reports in chat form.
-            </p>
+            <h1>🔍 Concord</h1>
+            <p>Ask questions and get live research reports in chat form.</p>
           </div>
         </header>
 
-        <div className="chat-messages">
-          {messages.map((message) => {
-            const isUser = message.role === "user";
-            const isAssistant = message.role === "assistant";
-            return (
-              <div
-                key={message.id}
-                className={`chat-message-row ${isUser ? "user" : "assistant"}`}
-              >
-                <div className={`chat-bubble ${isUser ? "user" : "assistant"}`}>
-                  {isAssistant && message.status === "running" ? (
-                    <div className="assistant-running">
-                      <span>{message.content}</span>
-                      <span className="typing-dots" aria-hidden="true">
-                        <span>•</span>
-                        <span>•</span>
-                        <span>•</span>
-                      </span>
-                    </div>
-                  ) : message.status === "failed" ? (
-                    <div className="assistant-error">{message.content}</div>
-                  ) : isAssistant ? (
-                    <ReactMarkdown>{message.content}</ReactMarkdown>
-                  ) : (
-                    <div>{message.content}</div>
-                  )}
-                </div>
+        <div
+          className={`chat-messages ${messages.length === 0 ? "empty" : ""}`}
+        >
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon" aria-hidden="true">
+                🔍
               </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
+              <h2>Concord</h2>
+              <p>
+                Ask any question and get a structured research report powered by
+                AI agents.
+              </p>
+              <div className="empty-state-examples">
+                {exampleQueries.map((exampleQuery) => (
+                  <button
+                    key={exampleQuery}
+                    type="button"
+                    className="empty-state-card"
+                    onClick={() => setQuery(exampleQuery)}
+                  >
+                    {exampleQuery}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
+              {messages.map((message) => {
+                const isUser = message.role === "user";
+                const isAssistant = message.role === "assistant";
+                return (
+                  <div
+                    key={message.id}
+                    className={`chat-message-row ${isUser ? "user" : "assistant"}`}
+                  >
+                    <div
+                      className={`chat-bubble ${isUser ? "user" : "assistant"}`}
+                    >
+                      {isAssistant ? (
+                        <div className="assistant-message-body">
+                          {message.status === "done" && (
+                            <button
+                              type="button"
+                              className="assistant-copy-button"
+                              onClick={() =>
+                                handleCopyMessage(message.content, message.id)
+                              }
+                            >
+                              {copiedMessageId === message.id
+                                ? "Copied!"
+                                : "Copy"}
+                            </button>
+                          )}
+                          {message.status === "running" ? (
+                            <div className="assistant-running">
+                              <span>
+                                {RUNNING_STAGES[runningStageIndex] ||
+                                  "🔍 Planning subtasks..."}
+                              </span>
+                              <span className="typing-dots" aria-hidden="true">
+                                <span>•</span>
+                                <span>•</span>
+                                <span>•</span>
+                              </span>
+                            </div>
+                          ) : message.status === "failed" ? (
+                            <div className="assistant-error">
+                              {message.content}
+                            </div>
+                          ) : (
+                            <ReactMarkdown>{message.content}</ReactMarkdown>
+                          )}
+                        </div>
+                      ) : (
+                        <div>{message.content}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </>
+          )}
         </div>
 
         <div className="composer-card">
