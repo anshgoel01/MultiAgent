@@ -101,7 +101,7 @@ def health():
 # Research initiation endpoint
 @app.post('/research', response_model=ResearchResponse)
 @limiter.limit(os.getenv('RESEARCH_RATE_LIMIT', '5/minute'))
-async def research(req: ResearchReq, request: Request):
+async def research(req: ResearchReq, request: Request, token: str = Depends(verify_token_async)):
     """Initiate a new research task."""
     logger.info(f"New research request for query: {req.query[:100]}")
     
@@ -154,7 +154,7 @@ async def research(req: ResearchReq, request: Request):
 # Task polling endpoint
 @app.get('/tasks/{task_id}')
 @limiter.limit(os.getenv('POLL_RATE_LIMIT', '30/minute'))
-async def poll_task(task_id: str, request: Request):
+async def poll_task(task_id: str, request: Request, token: str = Depends(verify_token_async)):
     """Poll task status and results."""
     if not task_id or not task_id.strip():
         raise HTTPException(400, 'Invalid task_id')
