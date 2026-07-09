@@ -36,6 +36,30 @@ const RUNNING_STAGES = [
   "✍️ Writing report...",
 ];
 
+const formatReportContent = (content) => {
+  if (typeof content !== "string") {
+    return content;
+  }
+
+  return content.replace(
+    /(\(?\bSource:\s*.+?\s+Confidence:\s*(?:HIGH|MED|LOW)\)?)/gi,
+    "\n\n> $1",
+  );
+};
+
+const reportMarkdownComponents = {
+  h2: ({ node, ...props }) => <h2 className="report-heading" {...props} />,
+  p: ({ node, ...props }) => <p className="report-paragraph" {...props} />,
+  ol: ({ node, ...props }) => <ol className="report-list" {...props} />,
+  li: ({ node, ...props }) => <li className="report-list-item" {...props} />,
+  strong: ({ node, ...props }) => (
+    <strong className="report-strong" {...props} />
+  ),
+  blockquote: ({ node, ...props }) => (
+    <blockquote className="report-metadata" {...props} />
+  ),
+};
+
 const createSession = (messages = [], title = "New chat") => ({
   id: getMessageId(),
   title,
@@ -529,7 +553,12 @@ export default function App() {
                               {message.content}
                             </div>
                           ) : (
-                            <ReactMarkdown>{message.content}</ReactMarkdown>
+                            <ReactMarkdown
+                              className="assistant-markdown"
+                              components={reportMarkdownComponents}
+                            >
+                              {formatReportContent(message.content)}
+                            </ReactMarkdown>
                           )}
                         </div>
                       ) : (
