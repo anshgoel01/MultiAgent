@@ -41,11 +41,17 @@ Findings:
 Respond with exactly one word: SUFFICIENT or INSUFFICIENT.'''
 
         response = llm.invoke(prompt)
-        content = str(response.content).strip().upper() if response and hasattr(response, 'content') else ''
-        verdict = 'SUFFICIENT' if content == 'SUFFICIENT' else 'INSUFFICIENT'
-        status = 'sufficient' if verdict == 'SUFFICIENT' else 'insufficient'
+        raw = str(response.content).strip().upper() if response and hasattr(response, 'content') else ''
 
-        logger.info(f"[Critic] Verdict: {status}")
+        if 'INSUFFICIENT' in raw:
+            status = 'insufficient'
+        elif 'SUFFICIENT' in raw:
+            status = 'sufficient'
+        else:
+            logger.warning(f"[Critic] Unparseable response: {raw!r} — defaulting to sufficient")
+            status = 'sufficient'
+
+        logger.info(f"[Critic] Verdict: {status} (raw: {raw!r})")
         return {'status': status, 'critic_retries': retry_count}
     except Exception as e:
         logger.error(f"[Critic] Error during review: {str(e)}", exc_info=True)
