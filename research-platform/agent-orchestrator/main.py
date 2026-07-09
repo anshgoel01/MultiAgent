@@ -4,7 +4,9 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -40,11 +42,35 @@ allow_credentials=True,
 )
 
 # In-memory query cache: hash -> report string
-_report_cache: dict[str, str] = {}
+MAX_CACHE_ENTRIES = 100
+_report_cache: OrderedDict[str, str] = OrderedDict()
+
+
+def _normalize_query(query: str) -> str:
+    normalized = re.sub(r"\s+", " ", query.strip().lower())
+    return normalized.rstrip(" .!?;:,")
 
 
 def _cache_key(query: str) -> str:
-    return hashlib.md5(query.lower().strip().encode()).hexdigest()
+    normalized_query = _normalize_query(query)
+    return hashlib.md5(normalized_query.encode("utf-8")).hexdigest()
+
+
+def _get_cached_report(query: str) -> Optional[str]:
+    key = _cache_key(query)
+    if key in _report_cache:
+        _report_cache.move_to_end(key)
+        return _report_cache[key]
+    return None
+
+
+def _store_cached_report(query: str, report: str) -> None:
+    key = _cache_key(query)
+    if key in _report_cache:
+        _report_cache.move_to_end(key)
+    _report_cache[key] = report
+    while len(_report_cache) > MAX_CACHE_ENTRIES:
+        _report_cache.popitem(last=False)
 
 
 @app.on_event("startup")
@@ -84,13 +110,14 @@ async def run_research(req: RunResearchRequest, background_tasks: BackgroundTask
     if not req.query or not req.query.strip():
         raise HTTPException(400, "Query cannot be empty")
 
-    # Check cache first
-    key = _cache_key(req.query)
-    if key in _report_cache:
-        logger.info(f"Cache hit for task {req.task_id} — returning instantly")
-        background_tasks.add_task(_resolve_from_cache, req.task_id, _report_cache[key])
+    query_preview = req.query.strip()[:80]
+    cached_report = _get_cached_report(req.query)
+    if cached_report is not None:
+        logger.info(f"[Cache] HIT for query: {query_preview}")
+        background_tasks.add_task(_resolve_from_cache, req.task_id, cached_report)
         return {"ok": True, "task_id": req.task_id, "cached": True}
 
+    logger.info(f"[Cache] MISS for query: {query_preview} - running pipeline")
     background_tasks.add_task(execute_graph, req.task_id, req.query)
     return {"ok": True, "task_id": req.task_id, "cached": False}
 
@@ -129,6 +156,14 @@ async def _update_task(task_id: str, status: str, report: str = None):
 
 async def execute_graph(task_id: str, query: str):
     """Execute the LangGraph pipeline and persist results."""
+    query_preview = query.strip()[:80]
+    cached_report = _get_cached_report(query)
+    if cached_report is not None:
+        logger.info(f"[Cache] HIT for query: {query_preview} - skipping pipeline")
+        await _update_task(task_id, "DONE", cached_report)
+        return
+
+    logger.info(f"[Cache] MISS for query: {query_preview} - running pipeline")
     await _update_task(task_id, "RUNNING")
 
     try:
@@ -149,9 +184,10 @@ async def execute_graph(task_id: str, query: str):
         final_state = research_graph.invoke(initial_state)
         report = final_state.get("report") or "No report generated"
 
-        # Store in cache for future identical queries
-        _report_cache[_cache_key(query)] = report
-        logger.info(f"Cached report for query (cache size: {len(_report_cache)})")
+        _store_cached_report(query, report)
+        logger.info(
+            f"[Cache] STORED for query: {query_preview} (cache size: {len(_report_cache)})"
+        )
 
         await _update_task(task_id, "DONE", report)
         logger.info(f"Task {task_id} completed successfully")
