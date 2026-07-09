@@ -57,9 +57,9 @@ def route_after_critic(state: dict) -> str:
     status = state.get('status', '')
     retries = int(state.get('critic_retries', 0))
 
-    if status == 'insufficient' and retries < MAX_CRITIC_RETRIES:
-        logger.info(f"[Critic] Routing back to retriever after attempt {retries}")
-        return 'retriever'
+    if status == 'insufficient' and retries <= MAX_CRITIC_RETRIES:
+        logger.info(f"[Critic] Routing back to requery after attempt {retries}")
+        return 'requery'
 
     logger.info(f"[Critic] Routing to writer after attempt {retries} with status {status}")
     return 'writer'

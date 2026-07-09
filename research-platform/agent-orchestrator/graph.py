@@ -39,6 +39,7 @@ def build_research_graph():
     graph.add_node("analyst", analyst_agent)
     graph.add_node("critic", critic_agent)
     graph.add_node("writer", writer_agent)
+    graph.add_node("requery", lambda state: {}) 
 
     # Add edges for workflow
     # Start -> Planner
@@ -47,6 +48,9 @@ def build_research_graph():
     # Planner -> Retriever and WebSearch (parallel)
     graph.add_edge("planner", "retriever")
     graph.add_edge("planner", "web_search")
+    
+    graph.add_edge("requery", "retriever")          # <-- ADD
+    graph.add_edge("requery", "web_search")   
 
     # Retriever -> Analyst
     graph.add_edge("retriever", "analyst")
@@ -60,7 +64,7 @@ def build_research_graph():
         "critic",
         route_after_critic,
         {
-            "retriever": "retriever",
+            "requery": "requery",
             "writer": "writer",
         },
     )

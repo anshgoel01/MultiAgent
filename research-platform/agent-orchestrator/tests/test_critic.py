@@ -17,7 +17,7 @@ route_after_critic = critic_module.route_after_critic
 
 class CriticAgentTests(unittest.TestCase):
     def test_route_after_critic_retries_until_limit(self):
-        self.assertEqual(route_after_critic({"status": "insufficient", "critic_retries": 1}), "retriever")
+        self.assertEqual(route_after_critic({"status": "insufficient", "critic_retries": 1}), "requery")
         self.assertEqual(route_after_critic({"status": "insufficient", "critic_retries": 2}), "writer")
         self.assertEqual(route_after_critic({"status": "sufficient", "critic_retries": 5}), "writer")
 
