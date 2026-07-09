@@ -114,13 +114,20 @@ const loadPersistedState = () => {
   }
 };
 
-const savePersistedState = (sessions, activeSessionId) => {
+const savePersistedState = (sessions, activeSessionId, messages) => {
   if (!sessions.length) {
     localStorage.removeItem(STORAGE_KEY);
     return;
   }
 
-  const normalized = normalizeSessions(sessions);
+  const normalized = normalizeSessions(sessions).map((session) => {
+    if (session.id === activeSessionId) {
+      return { ...session, messages };
+    }
+
+    return session;
+  });
+
   localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({ sessions: normalized, activeSessionId }),
@@ -142,49 +149,50 @@ const formatTimestamp = (value) => {
 };
 
 export default function App() {
+  const getInitialAppState = () => {
+    const persisted = loadPersistedState();
+
+    if (persisted && persisted.sessions.length) {
+      const selectedSession = persisted.sessions.find(
+        (session) => session.id === persisted.activeSessionId,
+      );
+
+      return {
+        sessions: persisted.sessions,
+        activeSessionId:
+          persisted.activeSessionId || persisted.sessions[0].id || null,
+        messages:
+          selectedSession?.messages || persisted.sessions[0].messages || [],
+      };
+    }
+
+    const initialSession = createSession([], "New chat");
+    return {
+      sessions: [initialSession],
+      activeSessionId: initialSession.id,
+      messages: [],
+    };
+  };
+
+  const initialAppState = getInitialAppState();
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(initialAppState.messages);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [eventSource, setEventSource] = useState(null);
-  const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [sessions, setSessions] = useState(initialAppState.sessions);
+  const [activeSessionId, setActiveSessionId] = useState(
+    initialAppState.activeSessionId,
+  );
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [runningStageIndex, setRunningStageIndex] = useState(0);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const copyResetTimeoutRef = useRef(null);
-  const hasLoadedPersistedStateRef = useRef(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    const persisted = loadPersistedState();
-
-    if (persisted && persisted.sessions.length) {
-      setSessions(persisted.sessions);
-      setActiveSessionId(persisted.activeSessionId);
-      const selected = persisted.sessions.find(
-        (session) => session.id === persisted.activeSessionId,
-      );
-      setMessages(
-        selected ? selected.messages : persisted.sessions[0].messages,
-      );
-    } else {
-      const initialSession = createSession([], "New chat");
-      setSessions([initialSession]);
-      setActiveSessionId(initialSession.id);
-      setMessages([]);
-    }
-
-    hasLoadedPersistedStateRef.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!hasLoadedPersistedStateRef.current) {
-      return;
-    }
-
-    savePersistedState(sessions, activeSessionId);
-  }, [sessions, activeSessionId]);
+    savePersistedState(sessions, activeSessionId, messages);
+  }, [sessions, activeSessionId, messages]);
 
   useEffect(() => {
     return () => {
@@ -444,9 +452,11 @@ export default function App() {
   return (
     <div className={`app-shell ${isSidebarOpen ? "" : "sidebar-collapsed"}`}>
       <div className="chat-sidebar">
-        <button className="sidebar-new-chat" onClick={createFreshSession}>
-          + New Chat
-        </button>
+        <div className="sidebar-actions">
+          <button className="sidebar-new-chat" onClick={createFreshSession}>
+            + New Chat
+          </button>
+        </div>
 
         <div className="sidebar-session-list">
           {sessions.map((session) => {
