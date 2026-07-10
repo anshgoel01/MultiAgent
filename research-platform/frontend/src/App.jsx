@@ -65,12 +65,16 @@ const createSession = (messages = [], title = "New chat") => ({
   title,
   timestamp: new Date().toISOString(),
   messages,
+  pinned: false,
 });
 
 const sortSessions = (sessionList) =>
-  [...sessionList].sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-  );
+  [...sessionList].sort((a, b) => {
+    if ((a.pinned ? 1 : 0) !== (b.pinned ? 1 : 0)) {
+      return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    }
+    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+  });
 
 const normalizeSessions = (sessionList) =>
   sortSessions(sessionList)
@@ -78,6 +82,7 @@ const normalizeSessions = (sessionList) =>
       ...session,
       title: session.title || "New chat",
       messages: session.messages || [],
+      pinned: Boolean(session.pinned),
     }))
     .slice(0, MAX_SESSIONS);
 
@@ -179,16 +184,117 @@ export default function App() {
   const [messages, setMessages] = useState(initialAppState.messages);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [eventSource, setEventSource] = useState(null);
   const [sessions, setSessions] = useState(initialAppState.sessions);
   const [activeSessionId, setActiveSessionId] = useState(
     initialAppState.activeSessionId,
   );
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [openSessionMenuId, setOpenSessionMenuId] = useState(null);
+  const [hoveredSessionId, setHoveredSessionId] = useState(null);
   const [runningStageIndex, setRunningStageIndex] = useState(0);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const copyResetTimeoutRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const eventSourcesRef = useRef(new Map());
+  const activeStreamCountRef = useRef(0);
+  const reconnectedSessionsRef = useRef(new Set());
+
+  const syncSessionMessages = (sessionId, updater) => {
+    setSessions((currentSessions) => {
+      const targetSession = currentSessions.find(
+        (session) => session.id === sessionId,
+      );
+      if (!targetSession) {
+        return currentSessions;
+      }
+
+      const updatedMessages = updater(targetSession.messages || []);
+      const nextSessions = currentSessions.map((session) =>
+        session.id === sessionId
+          ? { ...session, messages: updatedMessages }
+          : session,
+      );
+
+      if (activeSessionId === sessionId) {
+        setMessages(updatedMessages);
+      }
+
+      return sortSessions(nextSessions);
+    });
+  };
+
+  const closeStream = (taskId) => {
+    const source = eventSourcesRef.current.get(taskId);
+    if (source) {
+      source.close();
+      eventSourcesRef.current.delete(taskId);
+    }
+
+    activeStreamCountRef.current = Math.max(
+      0,
+      activeStreamCountRef.current - 1,
+    );
+    if (activeStreamCountRef.current === 0) {
+      setLoading(false);
+    }
+  };
+
+  function connectStream(taskId, assistantId, sessionId) {
+    if (!taskId || eventSourcesRef.current.has(taskId)) {
+      return;
+    }
+
+    const source = new EventSource(`http://localhost:8002/stream/${taskId}`);
+    eventSourcesRef.current.set(taskId, source);
+    activeStreamCountRef.current += 1;
+    setLoading(true);
+
+    syncSessionMessages(sessionId, (prevMessages) =>
+      prevMessages.map((message) =>
+        message.id === assistantId ? { ...message, task_id: taskId } : message,
+      ),
+    );
+
+    source.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      const newContent = formatStatusContent(data.status, data.report);
+      const newStatus =
+        data.status === "DONE"
+          ? "done"
+          : data.status === "FAILED"
+            ? "failed"
+            : "running";
+
+      syncSessionMessages(sessionId, (prevMessages) =>
+        prevMessages.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: newContent, status: newStatus }
+            : message,
+        ),
+      );
+
+      if (data.status === "FAILED") {
+        setError(data.report || "Research failed.");
+        closeStream(taskId);
+      }
+
+      if (data.status === "DONE") {
+        closeStream(taskId);
+      }
+    };
+
+    source.onerror = () => {
+      setError("Stream disconnected");
+      syncSessionMessages(sessionId, (prevMessages) =>
+        prevMessages.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: "Research failed.", status: "failed" }
+            : message,
+        ),
+      );
+      closeStream(taskId);
+    };
+  }
 
   useEffect(() => {
     savePersistedState(sessions, activeSessionId, messages);
@@ -196,11 +302,44 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
+      eventSourcesRef.current.forEach((source) => source.close());
+      eventSourcesRef.current.clear();
+      activeStreamCountRef.current = 0;
     };
-  }, [eventSource]);
+  }, []);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      return;
+    }
+
+    if (reconnectedSessionsRef.current.has(activeSessionId)) {
+      return;
+    }
+
+    const session = sessions.find((item) => item.id === activeSessionId);
+    const runningMessages = (session?.messages || []).filter(
+      (message) => message.role === "assistant" && message.status === "running",
+    );
+
+    runningMessages.forEach((message) => {
+      if (message.task_id) {
+        if (!eventSourcesRef.current.has(message.task_id)) {
+          connectStream(message.task_id, message.id, activeSessionId);
+        }
+      } else {
+        syncSessionMessages(activeSessionId, (prevMessages) =>
+          prevMessages.map((existing) =>
+            existing.id === message.id
+              ? { ...existing, content: "Research failed.", status: "failed" }
+              : existing,
+          ),
+        );
+      }
+    });
+
+    reconnectedSessionsRef.current.add(activeSessionId);
+  }, [activeSessionId, sessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -234,6 +373,20 @@ export default function App() {
     };
   }, []);
 
+  // Close the open session dropdown when clicking anywhere else on the page.
+  useEffect(() => {
+    if (!openSessionMenuId) {
+      return undefined;
+    }
+
+    const handleClickOutside = () => setOpenSessionMenuId(null);
+    document.addEventListener("click", handleClickOutside);
+
+    return () => {
+      document.removeEventListener("click", handleClickOutside);
+    };
+  }, [openSessionMenuId]);
+
   const appendMessage = (message) => {
     setMessages((prev) => {
       const nextMessages = [...prev, message];
@@ -250,6 +403,49 @@ export default function App() {
     });
   };
 
+  const togglePinSession = (sessionId) => {
+    setSessions((currentSessions) =>
+      sortSessions(
+        currentSessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, pinned: !session.pinned }
+            : session,
+        ),
+      ),
+    );
+  };
+
+  const deleteSession = (sessionId) => {
+    setSessions((currentSessions) => {
+      const nextSessions = currentSessions.filter(
+        (session) => session.id !== sessionId,
+      );
+
+      if (nextSessions.length === 0) {
+        const freshSession = createSession([], "New chat");
+        setActiveSessionId(freshSession.id);
+        setMessages([]);
+        setOpenSessionMenuId(null);
+        return [freshSession];
+      }
+
+      if (sessionId === activeSessionId) {
+        const nextActive = nextSessions[0];
+        setActiveSessionId(nextActive.id);
+        setMessages(nextActive.messages || []);
+      }
+
+      setOpenSessionMenuId(null);
+      return nextSessions;
+    });
+  };
+
+  const toggleSessionMenu = (sessionId) => {
+    setOpenSessionMenuId((current) =>
+      current === sessionId ? null : sessionId,
+    );
+  };
+
   const createFreshSession = () => {
     const freshSession = createSession([], "New chat");
     setSessions((prev) => sortSessions([freshSession, ...prev]));
@@ -258,11 +454,6 @@ export default function App() {
     setError("");
     setLoading(false);
     setQuery("");
-
-    if (eventSource) {
-      eventSource.close();
-      setEventSource(null);
-    }
   };
 
   const selectSession = (sessionId) => {
@@ -278,11 +469,6 @@ export default function App() {
     setError("");
     setLoading(false);
     setQuery("");
-
-    if (eventSource) {
-      eventSource.close();
-      setEventSource(null);
-    }
   };
 
   async function submitQuery() {
@@ -305,6 +491,7 @@ export default function App() {
       role: "assistant",
       content: "Researching...",
       status: "running",
+      task_id: null,
     };
 
     const nextMessages = [...messages, userMessage, assistantMessage];
@@ -325,10 +512,6 @@ export default function App() {
     );
     setLoading(true);
     setQuery("");
-
-    if (eventSource) {
-      eventSource.close();
-    }
 
     const res = await fetch("http://localhost:8000/research", {
       method: "POST",
@@ -357,68 +540,7 @@ export default function App() {
     }
 
     const { task_id } = await res.json();
-    connectStream(task_id, assistantId);
-  }
-
-  function connectStream(taskId, assistantId) {
-    const source = new EventSource(`http://localhost:8002/stream/${taskId}`);
-
-    source.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      const newContent = formatStatusContent(data.status, data.report);
-      const newStatus =
-        data.status === "DONE"
-          ? "done"
-          : data.status === "FAILED"
-            ? "failed"
-            : "running";
-
-      setMessages((prev) => {
-        const updatedMessages = prev.map((message) =>
-          message.id === assistantId
-            ? { ...message, content: newContent, status: newStatus }
-            : message,
-        );
-
-        setSessions((currentSessions) =>
-          sortSessions(
-            currentSessions.map((session) =>
-              session.id === activeSessionId
-                ? { ...session, messages: updatedMessages }
-                : session,
-            ),
-          ),
-        );
-
-        return updatedMessages;
-      });
-
-      if (data.status === "FAILED") {
-        setError(data.report || "Research failed.");
-        setLoading(false);
-        source.close();
-      }
-
-      if (data.status === "DONE") {
-        setLoading(false);
-        source.close();
-      }
-    };
-
-    source.onerror = () => {
-      setError("Stream disconnected");
-      setLoading(false);
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === assistantId
-            ? { ...message, content: "Stream disconnected.", status: "failed" }
-            : message,
-        ),
-      );
-      source.close();
-    };
-
-    setEventSource(source);
+    connectStream(task_id, assistantId, activeSessionId);
   }
 
   const handleKeyDown = (event) => {
@@ -461,17 +583,73 @@ export default function App() {
         <div className="sidebar-session-list">
           {sessions.map((session) => {
             const isActive = session.id === activeSessionId;
+            const isMenuOpen = openSessionMenuId === session.id;
+            const isHovered = hoveredSessionId === session.id;
+            const showMenuHandle = isHovered || isMenuOpen;
+
             return (
-              <button
+              <div
                 key={session.id}
-                className={`sidebar-session-button ${isActive ? "active" : ""}`}
-                onClick={() => selectSession(session.id)}
+                className={`sidebar-session-row ${isActive ? "active" : ""}`}
+                onMouseEnter={() => setHoveredSessionId(session.id)}
+                onMouseLeave={() => setHoveredSessionId(null)}
               >
-                <div className="session-title">{session.title}</div>
-                <div className="session-meta">
-                  {formatTimestamp(session.timestamp)}
-                </div>
-              </button>
+                <button
+                  className={`sidebar-session-button ${isActive ? "active" : ""}`}
+                  onClick={() => selectSession(session.id)}
+                  type="button"
+                >
+                  <div className="session-title">{session.title}</div>
+                  <div className="session-meta">
+                    {formatTimestamp(session.timestamp)}
+                    {session.pinned && (
+                      <span className="session-pin-indicator"> • pinned</span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Sibling of the session button, not nested inside it —
+                    a <button> inside a <button> is invalid HTML and was
+                    breaking clicks/hover before. */}
+                {showMenuHandle && (
+                  <button
+                    className="sidebar-session-menu-handle"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleSessionMenu(session.id);
+                    }}
+                    type="button"
+                    aria-label="Open chat actions"
+                  >
+                    ⋯
+                  </button>
+                )}
+
+                {isMenuOpen && (
+                  <div
+                    className="sidebar-session-dropdown"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      className="sidebar-session-dropdown-item"
+                      onClick={() => {
+                        togglePinSession(session.id);
+                        setOpenSessionMenuId(null);
+                      }}
+                    >
+                      {session.pinned ? "Unpin chat" : "Pin chat"}
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-session-dropdown-item sidebar-session-dropdown-delete"
+                      onClick={() => deleteSession(session.id)}
+                    >
+                      Delete chat
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
