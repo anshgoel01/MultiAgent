@@ -1,14 +1,39 @@
 from langchain_groq import ChatGroq
 import os
 import logging
+import re
+
 logger = logging.getLogger(__name__)
 llm = ChatGroq(model='llama-3.3-70b-versatile', api_key=os.getenv('GROQ_API_KEY'))
+
+
+def get_length_instruction(query: str) -> str:
+    query_lower = query.lower()
+    
+    # Check for numeric word counts (e.g., "100 words", "under 200 words", "in 150 words")
+    match = re.search(r'(\d+)\s*words?', query_lower)
+    if match:
+        return f"Maximum {match.group(1)} words total"
+        
+    # Check for common phrases
+    if "one paragraph" in query_lower or "one-paragraph" in query_lower or "single paragraph" in query_lower:
+        return "Maximum 150 words total, written as a single paragraph (ignore standard multi-section format if necessary)"
+        
+    if "brief" in query_lower or "short" in query_lower:
+        return "Maximum 200 words total"
+        
+    if "detailed" in query_lower or "in-depth" in query_lower or "in depth" in query_lower:
+        return "Maximum 1200 words total (provide detailed explanations for each section)"
+        
+    return "Maximum 600 words total"
+
 
 def writer_agent(state: dict) -> dict:
     findings_text = '\n'.join(state.get('findings', []))
     query = state.get('query', '')
     
     logger.info(f"[Writer] Writing report for: {query[:80]}")
+    length_instruction = get_length_instruction(query)
 
     prompt = f'''You are a senior research analyst writing for a professional audience.
 
@@ -38,7 +63,7 @@ Highlight agreements and contradictions between sources.
 Rules:
 - No filler phrases like "it is worth noting" or "it is important to mention"
 - No claims not supported by the findings above
-- Maximum 600 words total
+- {length_instruction}
 - Use bold for key terms'''
 
     try:

@@ -10,19 +10,34 @@ from collections import OrderedDict
 from typing import Optional
 
 import httpx
+# pyrefly: ignore [missing-import]
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+# pyrefly: ignore [missing-import]
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import Config
 from graph import ResearchState, research_graph
+from langchain_groq import ChatGroq
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+try:
+    gatekeeper_llm = ChatGroq(
+        model=os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant'),
+        api_key=os.getenv('GROQ_API_KEY'),
+        temperature=0.0,
+        max_tokens=256,
+    )
+except Exception as e:
+    logger.error(f"Failed to initialize Groq LLM for gatekeeper: {str(e)}")
+    gatekeeper_llm = None
 
 app = FastAPI(title="Agent Orchestrator")
 
@@ -165,6 +180,45 @@ async def execute_graph(task_id: str, query: str):
 
     logger.info(f"[Cache] MISS for query: {query_preview} - running pipeline")
     await _update_task(task_id, "RUNNING")
+
+    # Gatekeeper check
+    is_valid = True
+    friendly_message = "That doesn't look like a research question — try asking something like 'What are the latest trends in X?' or 'Compare A vs B.'"
+    
+    if gatekeeper_llm is None:
+        logger.error("[Gatekeeper] LLM not initialized, proceeding with pipeline as fallback")
+    else:
+        try:
+            prompt = f"""You are a gatekeeper for a research assistant.
+Your job is to classify the user query.
+Is the following query a genuine research/informational question, or is it just a greeting, chit-chat, profanity/abuse, or meaningless input?
+
+Query: {query}
+
+Respond with exactly one word: VALID or INVALID."""
+            
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, gatekeeper_llm.invoke, prompt)
+            raw = str(response.content).strip().upper() if response and hasattr(response, 'content') else ''
+            
+            if 'INVALID' in raw:
+                is_valid = False
+            elif 'VALID' in raw:
+                is_valid = True
+            else:
+                logger.warning(f"[Gatekeeper] Unparseable response: {raw!r} — defaulting to VALID")
+                is_valid = True
+        except Exception as e:
+            logger.error(f"[Gatekeeper] Error during classification: {str(e)} - defaulting to VALID", exc_info=True)
+            is_valid = True
+
+    if not is_valid:
+        logger.info(f"[Gatekeeper] REJECTED: {query}")
+        _store_cached_report(query, friendly_message)
+        await _update_task(task_id, "DONE", friendly_message)
+        return
+
+    logger.info(f"[Gatekeeper] ACCEPTED: {query}")
 
     try:
         logger.info(f"Starting research workflow for task {task_id}")
