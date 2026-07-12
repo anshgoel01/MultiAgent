@@ -11,7 +11,7 @@ from typing import Optional
 
 import httpx
 # pyrefly: ignore [missing-import]
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Header
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 # pyrefly: ignore [missing-import]
@@ -289,8 +289,13 @@ Respond with exactly one word: VALID or INVALID."""
 
 
 @app.get("/stream/{task_id}")
-async def stream_progress(task_id: str):
+async def stream_progress(task_id: str, x_internal_token: Optional[str] = Header(None)):
     """Stream task status changes to the browser over SSE."""
+    expected_token = os.getenv("INTERNAL_AUTH_TOKEN", "some_shared_internal_secret")
+    if not x_internal_token or x_internal_token != expected_token:
+        logger.warning(f"Unauthorized internal access attempt to stream task {task_id}")
+        raise HTTPException(status_code=401, detail="Unauthorized internal access")
+
     task_service_url = os.getenv("TASK_SERVICE_URL")
 
     async def event_gen():

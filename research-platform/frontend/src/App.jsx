@@ -153,6 +153,9 @@ const formatTimestamp = (value) => {
   });
 };
 
+// NOTE: This is still not real auth (client-exposed) — placeholder until real auth (e.g. JWT + user accounts) is added.
+const apiToken = import.meta.env.VITE_API_TOKEN || "demo-token";
+
 export default function App() {
   const getInitialAppState = () => {
     const persisted = loadPersistedState();
@@ -244,7 +247,8 @@ export default function App() {
       return;
     }
 
-    const source = new EventSource(`http://localhost:8002/stream/${taskId}`);
+    // Connect via gateway service (port 8000) using token query parameter since browser EventSource does not support custom headers
+    const source = new EventSource(`http://localhost:8000/stream/${taskId}?token=${encodeURIComponent(apiToken)}`);
     eventSourcesRef.current.set(taskId, source);
     activeStreamCountRef.current += 1;
     setLoading(true);
@@ -530,7 +534,7 @@ export default function App() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer demo-token",
+        Authorization: `Bearer ${apiToken}`,
       },
       body: JSON.stringify({
         query: userMessage.content,

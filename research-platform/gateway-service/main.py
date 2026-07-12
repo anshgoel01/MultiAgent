@@ -1,14 +1,22 @@
 # gateway-service/main.py
+import json
 import httpx
 import os
 import logging
 import sys
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
+# pyrefly: ignore [missing-import]
+from fastapi.responses import StreamingResponse
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+# pyrefly: ignore [missing-import]
 from slowapi import Limiter
+# pyrefly: ignore [missing-import]
 from slowapi.util import get_remote_address
+# pyrefly: ignore [missing-import]
 from slowapi.errors import RateLimitExceeded
 
 # Setup rate limiter
@@ -81,19 +89,30 @@ class ResearchResponse(BaseModel):
     message: str
 
 # Async token verification
-async def verify_token_async(authorization: str = Header(...)) -> str:
-    """Verify JWT token from Authorization header (async-safe)."""
+async def verify_token_async(
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = None
+) -> str:
+    """Verify auth token from Authorization header or token query parameter (async-safe)."""
     try:
-        if not authorization.startswith('Bearer '):
-            logger.warning("Invalid authorization header format")
-            raise HTTPException(401, 'Invalid authorization header format')
+        resolved_token = None
+        if authorization:
+            if not authorization.startswith('Bearer '):
+                logger.warning("Invalid authorization header format")
+                raise HTTPException(401, 'Invalid authorization header format')
+            resolved_token = authorization.replace('Bearer ', '')
+        elif token:
+            resolved_token = token
+        else:
+            logger.warning("No authorization header or token query parameter provided")
+            raise HTTPException(401, 'Missing token')
         
-        token = authorization.replace('Bearer ', '')
-        if token != 'demo-token':
-            logger.warning(f"Invalid token attempt from user")
+        expected_token = os.getenv("API_AUTH_TOKEN", "demo-token")
+        if resolved_token != expected_token:
+            logger.warning("Invalid token attempt from user")
             raise HTTPException(401, 'Unauthorized')
         
-        return token
+        return resolved_token
     except HTTPException:
         raise
     except Exception as e:
@@ -195,3 +214,42 @@ async def poll_task(task_id: str, request: Request, token: str = Depends(verify_
     except Exception as e:
         logger.error(f"Error polling task: {str(e)}")
         raise HTTPException(500, f'Failed to poll task: {str(e)}')
+
+# SSE stream proxy endpoint
+@app.get('/stream/{task_id}')
+async def stream_task_progress(
+    task_id: str,
+    token: str = Depends(verify_token_async)
+):
+    """Proxy the SSE stream from agent-orchestrator, enforcing auth."""
+    internal_token = os.getenv("INTERNAL_AUTH_TOKEN", "some_shared_internal_secret")
+    headers = {"X-Internal-Token": internal_token}
+    
+    async def event_generator():
+        async with httpx.AsyncClient() as client:
+            try:
+                async with client.stream(
+                    "GET",
+                    f"{ORCH_SVC}/stream/{task_id}",
+                    headers=headers,
+                    timeout=None
+                ) as response:
+                    if response.status_code != 200:
+                        logger.error(f"Orchestrator stream returned status {response.status_code}")
+                        yield f"data: {json.dumps({'status': 'FAILED', 'report': f'Orchestrator stream error: {response.status_code}'})}\n\n"
+                        return
+                    
+                    async for line in response.aiter_lines():
+                        yield line + "\n"
+            except Exception as e:
+                logger.error(f"Error proxying stream: {e}", exc_info=True)
+                yield f"data: {json.dumps({'status': 'FAILED', 'report': f'Stream proxy error: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
