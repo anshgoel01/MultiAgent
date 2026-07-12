@@ -18,8 +18,11 @@ def test_retry_reruns_both_sources():
         calls["web_search"] += 1
         return {"web_results": [f"web-{calls['web_search']}"]}
 
+    analyst_calls = 0
     def fake_analyst(state):
-        return {"findings": ["f1"], "status": "analyzed"}
+        nonlocal analyst_calls
+        analyst_calls += 1
+        return {"findings": [f"f{analyst_calls}"], "status": "analyzed"}
 
     verdicts = iter(["insufficient", "sufficient"])
     def fake_critic(state):
@@ -50,4 +53,5 @@ def test_retry_reruns_both_sources():
 
     assert calls["retriever"] == 2
     assert calls["web_search"] == 2
+    assert final["findings"] == ["f2"]
     assert final["report"] == "done"

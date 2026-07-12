@@ -4,6 +4,7 @@ import os
 from typing import List
 import psycopg2
 from psycopg2 import OperationalError
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
 from langchain_core.tools import tool
 
@@ -82,6 +83,16 @@ def search_documents(query: str, top_k: int = 5) -> List[str]:
             return results if results else ["No documents found"]
             
         except Exception as e:
+            is_undefined_table = False
+            if hasattr(e, 'pgcode') and e.pgcode == '42P01':
+                is_undefined_table = True
+            elif "relation \"documents\" does not exist" in str(e).lower():
+                is_undefined_table = True
+                
+            if is_undefined_table:
+                logger.error("CRITICAL ERROR: The 'documents' table does not exist in the database. Please run migrations or initialize the database.", exc_info=True)
+                raise e
+                
             logger.error(f"Error executing search query: {str(e)}", exc_info=True)
             return ["Error: Search query failed"]
         finally:

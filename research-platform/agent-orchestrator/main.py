@@ -93,6 +93,23 @@ def _store_cached_report(query: str, report: str) -> None:
 @app.on_event("startup")
 def startup_validation():
     logger.info("=== Agent Orchestrator Startup ===")
+    
+    import time
+    from db_init import init_database
+    for attempt in range(5):
+        try:
+            if init_database():
+                logger.info("Database ready")
+                break
+            else:
+                logger.warning(f"DB not ready, attempt {attempt+1}/5")
+        except Exception as e:
+            logger.warning(f"DB not ready, attempt {attempt+1}/5: {e}")
+        time.sleep(4)
+    else:
+        logger.error("Could not connect to DB")
+        sys.exit(1)
+
     if not Config.validate_on_startup():
         logger.critical("Environment validation failed - cannot start")
         sys.exit(1)
@@ -254,7 +271,8 @@ Respond with exactly one word: VALID or INVALID."""
             "error": None,
         }
 
-        final_state = research_graph.invoke(initial_state)
+        loop = asyncio.get_event_loop()
+        final_state = await loop.run_in_executor(None, research_graph.invoke, initial_state)
         report = final_state.get("report") or "No report generated"
 
         _store_cached_report(query, report)

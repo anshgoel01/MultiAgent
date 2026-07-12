@@ -4,7 +4,14 @@ import logging
 import re
 
 logger = logging.getLogger(__name__)
-llm = ChatGroq(model='llama-3.3-70b-versatile', api_key=os.getenv('GROQ_API_KEY'))
+try:
+    llm = ChatGroq(
+        model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+        api_key=os.getenv('GROQ_API_KEY')
+    )
+except Exception as e:
+    logger.error(f"Failed to initialize Groq LLM: {str(e)}")
+    llm = None
 
 
 def get_length_instruction(query: str) -> str:
@@ -29,6 +36,10 @@ def get_length_instruction(query: str) -> str:
 
 
 def writer_agent(state: dict) -> dict:
+    if llm is None:
+        logger.error("[Writer] LLM not initialized")
+        return {'report': 'Report generation failed: LLM not available', 'status': 'failed'}
+        
     findings_text = '\n'.join(state.get('findings', []))
     query = state.get('query', '')
     

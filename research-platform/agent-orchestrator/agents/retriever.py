@@ -50,6 +50,16 @@ def retriever_agent(state: dict) -> dict:
                     logger.info(f"[Retriever] +{len(results)} chunks")
             except Exception as e:
                 logger.error(f"[Retriever] Error on subtask '{subtask[:60]}': {e}")
+                
+                is_undefined_table = False
+                cause = getattr(e, '__cause__', None)
+                if (hasattr(e, 'pgcode') and e.pgcode == '42P01') or (cause and hasattr(cause, 'pgcode') and cause.pgcode == '42P01'):
+                    is_undefined_table = True
+                elif "relation \"documents\" does not exist" in str(e).lower():
+                    is_undefined_table = True
+                    
+                if is_undefined_table:
+                    raise e
                 continue
 
         unique_chunks = _deduplicate(all_chunks)
@@ -61,5 +71,16 @@ def retriever_agent(state: dict) -> dict:
         return {'retrieved': unique_chunks, 'status': 'retrieved'}
 
     except Exception as e:
+        is_undefined_table = False
+        cause = getattr(e, '__cause__', None)
+        if (hasattr(e, 'pgcode') and e.pgcode == '42P01') or (cause and hasattr(cause, 'pgcode') and cause.pgcode == '42P01'):
+            is_undefined_table = True
+        elif "relation \"documents\" does not exist" in str(e).lower():
+            is_undefined_table = True
+            
+        if is_undefined_table:
+            logger.error(f"[Retriever] CRITICAL: 'documents' table does not exist: {e}")
+            raise e
+            
         logger.error(f"[Retriever] Unexpected error: {e}", exc_info=True)
         return {'retrieved': [], 'status': 'error', 'error': str(e)}
