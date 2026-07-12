@@ -268,7 +268,12 @@ export default function App() {
       syncSessionMessages(sessionId, (prevMessages) =>
         prevMessages.map((message) =>
           message.id === assistantId
-            ? { ...message, content: newContent, status: newStatus }
+            ? {
+                ...message,
+                content: newContent,
+                status: newStatus,
+                task_type: data.task_type || message.task_type,
+              }
             : message,
         ),
       );
@@ -513,13 +518,25 @@ export default function App() {
     setLoading(true);
     setQuery("");
 
+    const history = messages
+      .filter((message) => message.role && message.content)
+      .map((message) => ({ role: message.role, content: message.content }));
+
+    const previousReport = [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.status === "done" && typeof message.content === "string")?.content || null;
+
     const res = await fetch("http://localhost:8000/research", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: "Bearer demo-token",
       },
-      body: JSON.stringify({ query: userMessage.content }),
+      body: JSON.stringify({
+        query: userMessage.content,
+        previous_report: previousReport,
+        history,
+      }),
     });
 
     if (!res.ok) {
@@ -701,6 +718,7 @@ export default function App() {
               {messages.map((message) => {
                 const isUser = message.role === "user";
                 const isAssistant = message.role === "assistant";
+                const isFollowup = message.task_type === "followup";
                 return (
                   <div
                     key={message.id}
@@ -711,7 +729,7 @@ export default function App() {
                     >
                       {isAssistant ? (
                         <div className="assistant-message-body">
-                          {message.status === "done" && (
+                          {message.status === "done" && !isFollowup && (
                             <button
                               type="button"
                               className="assistant-copy-button"
@@ -740,6 +758,8 @@ export default function App() {
                             <div className="assistant-error">
                               {message.content}
                             </div>
+                          ) : isFollowup ? (
+                            <div>{message.content}</div>
                           ) : (
                             <ReactMarkdown
                               className="assistant-markdown"

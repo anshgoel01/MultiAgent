@@ -66,8 +66,15 @@ def startup_validation():
     logger.info(f"Rate Limit: {RATE_LIMIT}")
     logger.info("Environment validation passed")
 
+class HistoryItem(BaseModel):
+    role: str
+    content: str
+
+
 class ResearchReq(BaseModel):
     query: str
+    previous_report: Optional[str] = None
+    history: Optional[list[HistoryItem]] = None
 
 class ResearchResponse(BaseModel):
     task_id: str
@@ -115,7 +122,11 @@ async def research(req: ResearchReq, request: Request, token: str = Depends(veri
             logger.info(f"Creating task for query: {req.query[:100]}")
             t = await client.post(
                 f'{TASK_SVC}/tasks',
-                json={'query': req.query},
+                json={
+                    'query': req.query,
+                    'previous_report': req.previous_report,
+                    'history': [item.model_dump() if hasattr(item, 'model_dump') else item.dict() for item in (req.history or [])],
+                },
                 timeout=10.0
             )
             if t.status_code != 201:
@@ -130,7 +141,12 @@ async def research(req: ResearchReq, request: Request, token: str = Depends(veri
             try:
                 await client.post(
                     f'{ORCH_SVC}/run',
-                    json={'task_id': task_id, 'query': req.query},
+                    json={
+                        'task_id': task_id,
+                        'query': req.query,
+                        'previous_report': req.previous_report,
+                        'history': [item.model_dump() if hasattr(item, 'model_dump') else item.dict() for item in (req.history or [])],
+                    },
                     timeout=5.0
                 )
                 logger.info(f"Orchestrator started for task {task_id}")

@@ -12,6 +12,7 @@ class Task(Base):
     query = Column(Text, nullable=False)
     status = Column(String, default='PENDING')  # PENDING|RUNNING|DONE|FAILED
     report = Column(Text, nullable=True)
+    task_type = Column(String, default='research')
     created = Column(DateTime(timezone=True), server_default=func.now())
     updated = Column(DateTime(timezone=True), onupdate=func.now())
 

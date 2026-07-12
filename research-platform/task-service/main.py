@@ -4,6 +4,7 @@ import os
 import sys
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from typing import Optional
 from database import get_db, test_db_connection, engine
@@ -30,16 +31,21 @@ app.add_middleware(
 # Request/Response models
 class CreateTaskReq(BaseModel):
     query: str
+    previous_report: Optional[str] = None
+    history: Optional[list[dict]] = None
+    task_type: Optional[str] = 'research'
 
 class UpdateTaskReq(BaseModel):
     status: str
     report: Optional[str] = None
+    task_type: Optional[str] = None
 
 class TaskResponse(BaseModel):
     task_id: str
     query: str
     status: str
     report: Optional[str] = None
+    task_type: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -62,6 +68,13 @@ def startup_event():
     for attempt in range(5):
         try:
             Base.metadata.create_all(bind=engine)
+            try:
+                with engine.begin() as conn:
+                    columns = {column['name'] for column in inspect(conn).get_columns('tasks')}
+                    if 'task_type' not in columns:
+                        conn.execute(text("ALTER TABLE tasks ADD COLUMN task_type VARCHAR DEFAULT 'research'"))
+            except Exception as e:
+                logger.warning(f"Task type migration skipped: {e}")
             if test_db_connection():
                 logger.info("Database ready")
                 break
@@ -91,7 +104,7 @@ def create_task(req: CreateTaskReq, db: Session = Depends(get_db)):
         if not req.query or not req.query.strip():
             raise HTTPException(400, 'Query cannot be empty')
 
-        task = Task(query=req.query)
+        task = Task(query=req.query, task_type=req.task_type or 'research')
         db.add(task)
         db.commit()
         db.refresh(task)
@@ -100,7 +113,8 @@ def create_task(req: CreateTaskReq, db: Session = Depends(get_db)):
         return {
             'task_id': task.id,
             'status': task.status,
-            'query': task.query
+            'query': task.query,
+            'task_type': task.task_type
         }
     except Exception as e:
         db.rollback()
@@ -118,7 +132,8 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
             'task_id': task.id,
             'query': task.query,
             'status': task.status,
-            'report': task.report
+            'report': task.report,
+            'task_type': task.task_type
         }
     except HTTPException:
         raise
@@ -144,8 +159,10 @@ def update_task(task_id: str, req: UpdateTaskReq, db: Session = Depends(get_db))
             raise HTTPException(400, f'Invalid status. Must be one of {valid_statuses}')
 
         task.status = req.status
-        if req.report:
+        if req.report is not None:
             task.report = req.report
+        if req.task_type is not None:
+            task.task_type = req.task_type
 
         db.commit()
         logger.info(f"Task {task_id} updated to {req.status}")

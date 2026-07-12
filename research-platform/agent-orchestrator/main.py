@@ -21,6 +21,8 @@ from pydantic import BaseModel
 from config import Config
 from graph import ResearchState, research_graph
 from langchain_groq import ChatGroq
+from agents.intent_classifier import classify_intent
+from agents.followup_answerer import followup_answerer
 
 logging.basicConfig(
     level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -103,6 +105,8 @@ def startup_validation():
 class RunResearchRequest(BaseModel):
     task_id: str
     query: str
+    previous_report: Optional[str] = None
+    history: Optional[list[dict]] = None
 
 
 class RunResearchResponse(BaseModel):
@@ -126,14 +130,16 @@ async def run_research(req: RunResearchRequest, background_tasks: BackgroundTask
         raise HTTPException(400, "Query cannot be empty")
 
     query_preview = req.query.strip()[:80]
-    cached_report = _get_cached_report(req.query)
-    if cached_report is not None:
-        logger.info(f"[Cache] HIT for query: {query_preview}")
-        background_tasks.add_task(_resolve_from_cache, req.task_id, cached_report)
-        return {"ok": True, "task_id": req.task_id, "cached": True}
+    has_context = bool(req.previous_report and req.previous_report.strip())
+    if not has_context:
+        cached_report = _get_cached_report(req.query)
+        if cached_report is not None:
+            logger.info(f"[Cache] HIT for query: {query_preview}")
+            background_tasks.add_task(_resolve_from_cache, req.task_id, cached_report)
+            return {"ok": True, "task_id": req.task_id, "cached": True}
 
     logger.info(f"[Cache] MISS for query: {query_preview} - running pipeline")
-    background_tasks.add_task(execute_graph, req.task_id, req.query)
+    background_tasks.add_task(execute_graph, req.task_id, req.query, req.previous_report, req.history)
     return {"ok": True, "task_id": req.task_id, "cached": False}
 
 
@@ -152,12 +158,14 @@ async def _resolve_from_cache(task_id: str, report: str):
         logger.error(f"Failed to resolve cached task {task_id}: {e}")
 
 
-async def _update_task(task_id: str, status: str, report: str = None):
+async def _update_task(task_id: str, status: str, report: str = None, task_type: Optional[str] = None):
     """Helper to PATCH task-service."""
     task_service_url = os.getenv("TASK_SERVICE_URL")
     payload = {"status": status}
     if report is not None:
         payload["report"] = report
+    if task_type is not None:
+        payload["task_type"] = task_type
     try:
         async with httpx.AsyncClient() as client:
             await client.patch(
@@ -169,17 +177,28 @@ async def _update_task(task_id: str, status: str, report: str = None):
         logger.warning(f"Could not update task {task_id} to {status}: {e}")
 
 
-async def execute_graph(task_id: str, query: str):
+async def execute_graph(task_id: str, query: str, previous_report: Optional[str] = None, history: Optional[list[dict]] = None):
     """Execute the LangGraph pipeline and persist results."""
     query_preview = query.strip()[:80]
-    cached_report = _get_cached_report(query)
-    if cached_report is not None:
-        logger.info(f"[Cache] HIT for query: {query_preview} - skipping pipeline")
-        await _update_task(task_id, "DONE", cached_report)
-        return
+    has_context = bool(previous_report and previous_report.strip())
+    if not has_context:
+        cached_report = _get_cached_report(query)
+        if cached_report is not None:
+            logger.info(f"[Cache] HIT for query: {query_preview} - skipping pipeline")
+            await _update_task(task_id, "DONE", cached_report)
+            return
 
     logger.info(f"[Cache] MISS for query: {query_preview} - running pipeline")
     await _update_task(task_id, "RUNNING")
+
+    if previous_report and str(previous_report).strip():
+        intent = classify_intent(query, previous_report)
+        logger.info(f"[IntentClassifier] {intent} for task {task_id}")
+        if intent == 'FOLLOWUP':
+            logger.info(f"[Followup] Short-circuiting graph for task {task_id}")
+            answer = followup_answerer(query=query, previous_report=previous_report, history=history)
+            await _update_task(task_id, "DONE", answer, task_type="followup")
+            return
 
     # Gatekeeper check
     is_valid = True
@@ -243,7 +262,7 @@ Respond with exactly one word: VALID or INVALID."""
             f"[Cache] STORED for query: {query_preview} (cache size: {len(_report_cache)})"
         )
 
-        await _update_task(task_id, "DONE", report)
+        await _update_task(task_id, "DONE", report, task_type="research")
         logger.info(f"Task {task_id} completed successfully")
 
     except Exception as e:
