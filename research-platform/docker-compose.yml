@@ -3,9 +3,8 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: secret
       POSTGRES_DB: research_db
+    env_file: .env
     ports:
       - "5432:5432"
     volumes:
@@ -13,16 +12,12 @@ services:
 
   task-service:
     build: ./task-service
-    ports:
-      - "8001:8001"
     env_file: .env
     depends_on:
       - postgres
 
   agent-orchestrator:
     build: ./agent-orchestrator
-    ports:
-      - "8002:8002"
     env_file: .env
     depends_on:
       - postgres

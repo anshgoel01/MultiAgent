@@ -14,7 +14,7 @@ class ResearchState(TypedDict):
     subtasks: Annotated[list[str], add]
     retrieved: Annotated[list[str], add]
     web_results: Annotated[list[str], add]
-    findings: Annotated[list[str], add]
+    findings: list[str]
     critic_retries: int
     report: Optional[str]
     status: str

@@ -11,7 +11,7 @@ from typing import Optional
 
 import httpx
 # pyrefly: ignore [missing-import]
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Header
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 # pyrefly: ignore [missing-import]
@@ -93,6 +93,23 @@ def _store_cached_report(query: str, report: str) -> None:
 @app.on_event("startup")
 def startup_validation():
     logger.info("=== Agent Orchestrator Startup ===")
+    
+    import time
+    from db_init import init_database
+    for attempt in range(5):
+        try:
+            if init_database():
+                logger.info("Database ready")
+                break
+            else:
+                logger.warning(f"DB not ready, attempt {attempt+1}/5")
+        except Exception as e:
+            logger.warning(f"DB not ready, attempt {attempt+1}/5: {e}")
+        time.sleep(4)
+    else:
+        logger.error("Could not connect to DB")
+        sys.exit(1)
+
     if not Config.validate_on_startup():
         logger.critical("Environment validation failed - cannot start")
         sys.exit(1)
@@ -254,7 +271,8 @@ Respond with exactly one word: VALID or INVALID."""
             "error": None,
         }
 
-        final_state = research_graph.invoke(initial_state)
+        loop = asyncio.get_event_loop()
+        final_state = await loop.run_in_executor(None, research_graph.invoke, initial_state)
         report = final_state.get("report") or "No report generated"
 
         _store_cached_report(query, report)
@@ -271,8 +289,13 @@ Respond with exactly one word: VALID or INVALID."""
 
 
 @app.get("/stream/{task_id}")
-async def stream_progress(task_id: str):
+async def stream_progress(task_id: str, x_internal_token: Optional[str] = Header(None)):
     """Stream task status changes to the browser over SSE."""
+    expected_token = os.getenv("INTERNAL_AUTH_TOKEN", "some_shared_internal_secret")
+    if not x_internal_token or x_internal_token != expected_token:
+        logger.warning(f"Unauthorized internal access attempt to stream task {task_id}")
+        raise HTTPException(status_code=401, detail="Unauthorized internal access")
+
     task_service_url = os.getenv("TASK_SERVICE_URL")
 
     async def event_gen():
