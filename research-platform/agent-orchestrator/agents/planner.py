@@ -38,8 +38,9 @@ Create exactly 3 diverse subtasks covering different aspects.
 
 Rules:
 - Do not narrow a broad topic unless user asks.
-- Cover fundamentals, applications, and recent developments.
 - Avoid overlapping subtasks.
+- If the query names specific, niche, or multiple technical concepts (for example, two methods being compared, or a specific technique applied to a specific problem), each subtask MUST keep those specific named concepts together. Do not decompose a specific combination into generic background questions about a single term in isolation.
+- Only use a general "fundamentals, applications, recent developments" pattern for broad, single-concept queries where no specific combination is being asked about.
 
 Query: {query}
 
